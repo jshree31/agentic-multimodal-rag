@@ -122,19 +122,86 @@ if page == "Chat":
                     st.error(response_json["error"])
                     response_text = response_json["error"]
                 else:
-                    main_text = response_json.get("response", "")
-                    page_no = response_json.get("page")
-                    doc_name = response_json.get("doc_name")
-                    confidence = response_json.get("confidence")
+                    # ✅ NEW ROUTE-AWARE RENDERING
+                    route = response_json.get("route")
 
-                    meta = f"\n\n📄 Page: {page_no} | Doc: {doc_name}" if page_no else ""
-                    conf = f"\n🎯 Confidence: {confidence}" if confidence else ""
+                    st.markdown(f"**🔀 Route Used:** {route}")
+                    st.markdown(response_json.get("answer", ""))
 
-                    response_text = f"{main_text}{meta}{conf}"
+                    # ─────────────────────────────
+                    # BANKING RESPONSE
+                    # ─────────────────────────────
+                    if route == "banking":
+                        st.subheader("🧾 SQL Query Executed")
+                        st.code(response_json.get("sql_query_executed", ""), language="sql")
 
-                    st.markdown(response_text)
+                        st.subheader("📊 SQL Result")
+                        sql_result = response_json.get("sql_result")
 
-        messages.append({"role": "assistant", "content": response_text})
+                        if isinstance(sql_result, list):
+                            st.json(sql_result)
+                        else:
+                            st.write(sql_result)
+
+                        st.caption(
+                            f"Database: {response_json.get('database_name')} | "
+                            f"Iterations: {response_json.get('iterations')}"
+                        )
+
+                    # ─────────────────────────────
+                    # DOCUMENT RESPONSE
+                    # ─────────────────────────────
+                    elif route == "document":
+                        st.subheader("📚 Retrieved Evidence")
+
+                        for i, chunk in enumerate(response_json.get("relevant_chunks", []), 1):
+                            st.markdown(f"**Chunk {i}**")
+                            st.markdown(chunk.get("content", ""))
+                            st.caption(
+                                f"Page: {chunk.get('page')} | "
+                                f"Section: {chunk.get('section')} | "
+                                f"Confidence: {chunk.get('confidence_score')}"
+                            )
+                            st.divider()
+
+                        st.markdown(
+                            f"📜 **Policy Citations:** "
+                            f"{response_json.get('policy_citations')}"
+                        )
+
+                    # ─────────────────────────────
+                    # HYBRID RESPONSE
+                    # ─────────────────────────────
+                    elif route == "hybrid":
+                        st.subheader("🧾 SQL Query Executed")
+                        st.code(response_json.get("sql_query_executed", ""), language="sql")
+
+                        st.subheader("📊 Banking Data")
+                        banking_data = response_json.get("banking_data")
+
+                        if isinstance(banking_data, list):
+                            st.json(banking_data)
+                        else:
+                            st.write(banking_data)
+
+                        st.subheader("📚 Supporting Policy Evidence")
+
+                        for i, chunk in enumerate(response_json.get("relevant_chunks", []), 1):
+                            st.markdown(f"**Chunk {i}**")
+                            st.markdown(chunk.get("content", ""))
+                            st.caption(
+                                f"Page: {chunk.get('page')} | "
+                                f"Section: {chunk.get('section')} | "
+                                f"Confidence: {chunk.get('confidence_score')}"
+                            )
+                            st.divider()
+
+                        st.markdown(
+                            f"📜 **Policy Citations:** "
+                            f"{response_json.get('policy_citations')}"
+                        )
+
+                    
 
 # =========================================================
 # 🛠️ ADMIN PAGE (UNCHANGED)
