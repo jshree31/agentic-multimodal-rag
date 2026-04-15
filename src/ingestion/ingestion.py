@@ -83,13 +83,7 @@ def store_chunks(
     if not chunks:
         return 0
 
-    contents = [c["content"] for c in chunks]
-
-    # ── Batch embedding ─────────────────────────────────────────
-    get_all_embeddings: List[List[float]] = []
-    for i in range(0, len(contents), _EMBED_BATCH_SIZE):
-        batch = contents[i: i + _EMBED_BATCH_SIZE]
-        get_all_embeddings.extend(embed_with_retry(get_embeddings_model, batch))
+    model = get_embeddings_model
 
     _DEDICATED_COLUMNS = {
         "content_type", "element_type", "section",
@@ -102,7 +96,7 @@ def store_chunks(
         try:
             with conn.cursor() as cur:
 
-                # Delete old chunks safely inside transaction
+                # ✅ Delete old chunks
                 cur.execute(
                     "DELETE FROM multimodal_chunks WHERE doc_id = %s::uuid",
                     (doc_id,),
@@ -111,72 +105,100 @@ def store_chunks(
                 img_dir = pathlib.Path("data/images")
                 img_dir.mkdir(parents=True, exist_ok=True)
 
-                for chunk, embedding in zip(chunks, get_all_embeddings):
-                    meta = chunk["metadata"].copy()  # FIXED
+                # 🔥 PROCESS IN BATCHES (embed + insert together)
+                for i in range(0, len(chunks), _EMBED_BATCH_SIZE):
 
-                    # ── Image handling with dedup ─────────────────
-                    img_b64 = meta.get("image_base64")
-                    image_path = None
-                    mime_type = None
+                    batch = chunks[i:i + _EMBED_BATCH_SIZE]
+                    texts = [c["content"] for c in batch]
 
-                    if img_b64:
-                        image_bytes = base64.b64decode(img_b64)
-                        img_hash = hashlib.sha256(image_bytes).hexdigest()
-                        img_file = img_dir / f"{img_hash}.png"
+                    print(f"[DEBUG] Processing batch {i} → size {len(batch)}")
 
-                        if not img_file.exists():
-                            img_file.write_bytes(image_bytes)
+                    # ✅ Embed safely
+                    #embeddings = embed_with_retry(model, texts)
+                    embeddings = []
+                    for text in texts:
+                        emb = embed_with_retry(model, [text])  # send single item
+                        if not emb or len(emb) == 0:
+                            raise ValueError("Empty embedding returned")
+                        embeddings.append(emb[0])
 
-                        image_path = str(img_file)
-                        mime_type = "image/png"
-
-                    # ── Vector formatting ─────────────────────────
-                    embedding_str = "[" + ",".join(map(str, embedding)) + "]"
-
-                    # Clean metadata
-                    clean_meta = {
-                        k: v for k, v in meta.items()
-                        if k not in _DEDICATED_COLUMNS
-                    }
-
-                    cur.execute(
-                        """
-                        INSERT INTO multimodal_chunks (
-                            doc_id, chunk_type, element_type, content,
-                            image_path, mime_type,
-                            page_number, section, source_file,
-                            position, embedding, metadata
-                        ) VALUES (
-                            %s::uuid, %s, %s, %s,
-                            %s, %s,
-                            %s, %s, %s,
-                            %s::jsonb, %s::vector, %s::jsonb
+                    if len(embeddings) != len(batch):
+                        raise ValueError(
+                            f"Embedding mismatch: got {len(embeddings)} for {len(batch)} chunks"
                         )
-                        """,
-                        (
-                            doc_id,
-                            chunk["content_type"],
-                            meta.get("element_type"),
-                            chunk["content"],
-                            image_path,
-                            mime_type,
-                            meta.get("page_number"),
-                            meta.get("section"),
-                            meta.get("source_file"),
-                            json.dumps(meta.get("position")) if meta.get("position") else None,
-                            embedding_str,
-                            json.dumps(clean_meta),
-                        ),
-                    )
-                    rows_inserted += 1
 
-            conn.commit()
+                    # ✅ Insert SAME batch
+                    for chunk, embedding in zip(batch, embeddings):
+                        meta = chunk["metadata"].copy()
+
+                        # ── Image handling ──
+                        img_b64 = meta.get("image_base64")
+                        image_path = None
+                        mime_type = None
+
+                        if img_b64:
+                            image_bytes = base64.b64decode(img_b64)
+                            img_hash = hashlib.sha256(image_bytes).hexdigest()
+                            img_file = img_dir / f"{img_hash}.png"
+
+                            if not img_file.exists():
+                                img_file.write_bytes(image_bytes)
+
+                            image_path = str(img_file)
+                            mime_type = "image/png"
+
+                        # ── Vector formatting ──
+                        embedding_str = "[" + ",".join(map(str, embedding)) + "]"
+
+                        # Clean metadata
+                        clean_meta = {
+                            k: v for k, v in meta.items()
+                            if k not in _DEDICATED_COLUMNS
+                        }
+
+                        cur.execute(
+                            """
+                            INSERT INTO multimodal_chunks (
+                                doc_id, chunk_type, element_type, content,
+                                image_path, mime_type,
+                                page_number, section, source_file,
+                                position, embedding, metadata
+                            ) VALUES (
+                                %s::uuid, %s, %s, %s,
+                                %s, %s,
+                                %s, %s, %s,
+                                %s::jsonb, %s::vector, %s::jsonb
+                            )
+                            """,
+                            (
+                                doc_id,
+                                chunk["content_type"],
+                                meta.get("element_type"),
+                                chunk["content"],
+                                image_path,
+                                mime_type,
+                                meta.get("page_number"),
+                                meta.get("section"),
+                                meta.get("source_file"),
+                                json.dumps(meta.get("position")) if meta.get("position") else None,
+                                embedding_str,
+                                json.dumps(clean_meta),
+                            ),
+                        )
+
+                        rows_inserted += 1
+
+                    # ✅ Commit per batch (VERY IMPORTANT)
+                    conn.commit()
+
+                    print(f"[DEBUG] Inserted so far: {rows_inserted}")
 
         except Exception as e:
             conn.rollback()
             logger.error(f"DB insert failed: {e}")
             raise
 
+    print(f"[FINAL] Total rows inserted: {rows_inserted}")
     return rows_inserted
 
 
@@ -279,7 +301,7 @@ if __name__ == "__main__":
     if len(sys.argv) >= 2:
         pdf_path = pathlib.Path(sys.argv[1])
     else:
-        pdf_path = pathlib.Path("data/RIL-Media-Release-RIL-Q2-FY2024-25-mini.pdf")
+        pdf_path = pathlib.Path("data/KB_Smart_Banking.pdf")
 
     result = run_ingestion(str(pdf_path), model)
     

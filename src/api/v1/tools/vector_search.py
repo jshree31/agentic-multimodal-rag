@@ -1,21 +1,7 @@
 from langchain.tools import tool
-from core.db import get_vector_store
-
+from src.core.db import vector_search_db
 
 @tool
-def vector_search(query: str, k: int = 5):
-    """
-    Semantic vector similarity search.
-    Best for conceptual or paraphrased queries.
-    """
-    vector_store = get_vector_store()
-    docs = vector_store.similarity_search(query, k=k)
-
-    return [
-        {
-            "content": doc.page_content,
-            "metadata": doc.metadata,
-            "retrieval_type": "vector",
-        }
-        for doc in docs
-    ]
+def vector_search(query: str, k: int = 5, chunk_type: str | None = None):
+    """Semantic vector similarity search."""
+    return vector_search_db(query, k=k, chunk_type=chunk_type)
