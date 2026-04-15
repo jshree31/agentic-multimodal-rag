@@ -271,8 +271,41 @@ import os
 import base64
 import io
 
+def extract_page_and_position(obj):
+    page_no = None
+    position = None
+
+    prov = getattr(obj, "prov", None)
+
+    if prov and len(prov) > 0:
+        p = prov[0]
+
+        page_no = getattr(p, "page_no", None)
+
+        bbox = getattr(p, "bbox", None)
+        if bbox:
+            position = {
+                "l": getattr(bbox, "l", None),
+                "t": getattr(bbox, "t", None),
+                "r": getattr(bbox, "r", None),
+                "b": getattr(bbox, "b", None),
+            }
+
+    return page_no, position
 
 def parse_document(file_path: str) -> list[dict]:
+    """Parse a PDF into a flat list of typed content chunks using Docling.
+
+    Each chunk is a dict with three keys:
+      content      — text or markdown representation of the element
+      content_type — one of: "text", "table", "image"
+      metadata     — dict with: content_type, element_type, section,
+                     page_number, source_file, image_base64
+
+    The metadata is passed through unchanged to PGVector, so every
+    retrieved chunk tells the query layer what kind of content it is
+    and where in the document it came from.
+    """
     from docling.document_converter import DocumentConverter
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions
@@ -307,6 +340,9 @@ def parse_document(file_path: str) -> list[dict]:
     # ─────────────────────────────────────────────
     for t in getattr(doc, "texts", []):
         text = getattr(t, "text", "").strip()
+    if text:
+        page_no, position = extract_page_and_position(t)
+        text = getattr(t, "text", "").strip()
         if text:
             parsed_chunks.append({
                 "content": text,
@@ -315,9 +351,9 @@ def parse_document(file_path: str) -> list[dict]:
                     "content_type": "text",
                     "element_type": "text",
                     "section": None,
-                    "page_number": getattr(t, "page_no", None),
+                    "page_number": page_no,
+                    "position": position,
                     "source_file": source_file,
-                    "position": None,
                     "image_base64": None,
                 }
             })
@@ -326,6 +362,7 @@ def parse_document(file_path: str) -> list[dict]:
     # TABLES
     # ─────────────────────────────────────────────
     for tb in getattr(doc, "tables", []):
+
         table_text = ""
 
         if hasattr(tb, "export_to_dataframe"):
@@ -352,6 +389,10 @@ def parse_document(file_path: str) -> list[dict]:
             table_text = getattr(tb, "text", "")
 
         if table_text.strip():
+
+            # ✅ FIX HERE (inside loop)
+            page_no, position = extract_page_and_position(tb)
+
             parsed_chunks.append({
                 "content": table_text.strip(),
                 "content_type": "table",
@@ -359,18 +400,18 @@ def parse_document(file_path: str) -> list[dict]:
                     "content_type": "table",
                     "element_type": "table",
                     "section": None,
-                    "page_number": getattr(tb, "page_no", None),
+                    "page_number": page_no,
                     "source_file": source_file,
-                    "position": None,
+                    "position": position,
                     "image_base64": None,
                 }
             })
-
     # ─────────────────────────────────────────────
     # IMAGES
     # ─────────────────────────────────────────────
     for pic in getattr(doc, "pictures", []):
         img_b64 = None
+        page_no, position = extract_page_and_position(pic)
 
         try:
             if hasattr(pic, "get_image"):
@@ -389,9 +430,9 @@ def parse_document(file_path: str) -> list[dict]:
                 "content_type": "image",
                 "element_type": "picture",
                 "section": None,
-                "page_number": getattr(pic, "page_no", None),
+                "page_number": page_no,
+                "position": position,
                 "source_file": source_file,
-                "position": None,
                 "image_base64": img_b64,
             }
         })

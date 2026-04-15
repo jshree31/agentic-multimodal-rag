@@ -1,5 +1,6 @@
 from fastapi import FastAPI 
 from src.api.v1.routes.query_routes import router as query_router
+from src.api.v1.routes.upload_routes import router as upload_router
 
 #create a FastAPI instance
 app = FastAPI(title = "MULTIMODAL RAG SYSTEM") 
@@ -19,3 +20,4 @@ def health_check():
     }
 
 app.include_router(query_router,prefix="/api/v1")
+app.include_router(upload_router, prefix="/api/v1")
