@@ -19,7 +19,7 @@ async def upload_pdf(file: UploadFile = File(...)):
     with open(file_path, "wb") as f:
         f.write(await file.read())
 
-    # 🔥 RUN INGESTION HERE
+    # RUN INGESTION
     result = run_ingestion(file_path, get_embeddings_model)
 
     return {
