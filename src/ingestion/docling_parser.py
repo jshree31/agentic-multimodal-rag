@@ -266,10 +266,10 @@ from docling.document_converter import DocumentConverter, PdfFormatOption
     print("Images:", doc.images)
 
     return parsed_chunks'''
-
 import os
 import base64
 import io
+from typing import List, Dict, Any
 
 def extract_page_and_position(obj):
     page_no = None
@@ -327,16 +327,19 @@ def parse_document(file_path: str) -> list[dict]:
     result = converter.convert(file_path)
     doc = result.document
 
-    print("[DEBUG] num_pages:", getattr(doc, "num_pages", None))
-    print("[DEBUG] texts:", len(getattr(doc, "texts", [])))
-    print("[DEBUG] tables:", len(getattr(doc, "tables", [])))
-    print("[DEBUG] pictures:", len(getattr(doc, "pictures", [])))
+    print(f"[DEBUG] num_pages: {getattr(doc, 'num_pages', None)}")
+    print(f"[DEBUG] texts: {len(getattr(doc, 'texts', []))}")
+    print(f"[DEBUG] tables: {len(getattr(doc, 'tables', []))}")
+    print(f"[DEBUG] pictures: {len(getattr(doc, 'pictures', []))}")
 
-    parsed_chunks = []
+    parsed_chunks: List[Dict[str, Any]] = []
     source_file = os.path.basename(file_path)
 
+    # Simple section tracking (can be enhanced later with iterate_items)
+    current_section = None
+
     # ─────────────────────────────────────────────
-    # TEXTS
+    # TEXT ELEMENTS (including section headers)
     # ─────────────────────────────────────────────
     for t in getattr(doc, "texts", []):
         text = getattr(t, "text", "").strip()
@@ -370,23 +373,21 @@ def parse_document(file_path: str) -> list[dict]:
                 df = tb.export_to_dataframe()
                 if df is not None and not df.empty:
                     rows = []
-                    headers = [str(c) for c in df.columns]
-
+                    headers = [str(c).strip() for c in df.columns]
                     for _, row in df.iterrows():
                         pairs = [
-                            f"{h}: {str(v)}"
+                            f"{h}: {str(v).strip()}"
                             for h, v in zip(headers, row)
-                            if str(v).strip()
+                            if str(v).strip() and str(v).strip().lower() not in ("nan", "none")
                         ]
                         if pairs:
                             rows.append(" | ".join(pairs))
-
                     table_text = "\n".join(rows)
-            except:
+            except Exception:
                 pass
 
         if not table_text:
-            table_text = getattr(tb, "text", "")
+            table_text = getattr(tb, "text", "") or ""
 
         if table_text.strip():
 
@@ -407,7 +408,7 @@ def parse_document(file_path: str) -> list[dict]:
                 }
             })
     # ─────────────────────────────────────────────
-    # IMAGES
+    # IMAGES / PICTURES
     # ─────────────────────────────────────────────
     for pic in getattr(doc, "pictures", []):
         img_b64 = None
@@ -420,11 +421,13 @@ def parse_document(file_path: str) -> list[dict]:
                     buf = io.BytesIO()
                     img.save(buf, format="PNG")
                     img_b64 = base64.b64encode(buf.getvalue()).decode()
-        except:
+        except Exception:
             pass
 
+        caption = getattr(pic, "text", "") or f"[Image on page {getattr(pic, 'page_no', '?')}]"
+
         parsed_chunks.append({
-            "content": "[Image]",
+            "content": caption,
             "content_type": "image",
             "metadata": {
                 "content_type": "image",
@@ -437,6 +440,5 @@ def parse_document(file_path: str) -> list[dict]:
             }
         })
 
-    print(f"[parse_document] Parsed {len(parsed_chunks)} elements")
-
+    print(f"[parse_document] Parsed {len(parsed_chunks)} chunks from {source_file}")
     return parsed_chunks
