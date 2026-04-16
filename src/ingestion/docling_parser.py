@@ -8,6 +8,8 @@ from annotated_types import doc
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
+from langchain_google_genai import ChatGoogleGenerativeAI
+from streamlit import caption
 
 # ---------------------------------------------------------------------------
 # Docling label taxonomy (DocItemLabel enum values we care about):
@@ -410,10 +412,31 @@ def parse_document(file_path: str) -> list[dict]:
     # ─────────────────────────────────────────────
     # IMAGES / PICTURES
     # ─────────────────────────────────────────────
+    model = ChatGoogleGenerativeAI("GOOGLE_LLM_MODEL")
+
+    def describe_image(img_b64):
+        try:
+        # Decode base64 → bytes
+            image_bytes = base64.b64decode(img_b64)
+
+            response = model.generate_content([
+                {
+                    "mime_type": "image/png",
+                    "data": image_bytes
+                },
+                "Describe this image in detail. If it's a chart or table, explain insights."
+            ])
+
+            return response.text
+
+        except Exception as e:
+            print("[Gemini ERROR]", e)
+            return "Image description unavailable"
     for pic in getattr(doc, "pictures", []):
         img_b64 = None
         page_no, position = extract_page_and_position(pic)
-
+        description = describe_image(img_b64) if img_b64 else "[Image]"
+        '''
         try:
             if hasattr(pic, "get_image"):
                 img = pic.get_image(doc)
